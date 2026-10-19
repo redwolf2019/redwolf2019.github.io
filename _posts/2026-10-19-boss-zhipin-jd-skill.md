@@ -3,7 +3,7 @@ title: 写一个通用的 Agent Skill，让 AI 在 BOSS直聘上查 JD
 description: 把 BOSS直聘的检索规则写成一份通用的 SKILL.md，Claude Code、Codex 等支持 Skill 的 Agent 都能加载：借浏览器工具在已登录的 Chrome 里翻列表、读详情、还原字体混淆的薪资，把 JD 存成 Markdown。附完整 SKILL.md 和踩过的坑。
 date: 2026-10-19 19:30:00 +0800
 categories: [AI, Agent]
-tags: [Agent Skills, SKILL.md, Claude Code, Codex, BOSS直聘, 浏览器自动化]
+tags: [Skill, Agent Skills, SKILL.md, Claude Code, Codex, BOSS直聘, 浏览器自动化]
 ---
 想知道一类岗位都在要什么技能，最直接的办法是去 BOSS直聘把 JD 翻一遍。这活我交给了 Agent，让它翻完再整理成 Markdown。跑通以后，我把整套检索规则写成了一个 Skill，叫 `boss-jd-search`。现在说一句「去 BOSS 上搜上海的数据分析岗位，20K 以上」，Agent 就会在我已登录的 Chrome 里翻列表、逐条点开详情、还原被字体混淆的薪资，最后写出一个 `jobs/<日期>-<关键词>.md`。关键词、城市、薪资每次现给，Skill 不绑定任何职位方向，搜后端、产品还是设计都一样。
 
