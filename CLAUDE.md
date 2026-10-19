@@ -24,6 +24,13 @@ tags: [生活]
 - `categories` 最多两级，`tags` 随意；分类页、标签页、归档、目录都自动生成。
 - 不要写 `layout: post`，Chirpy 默认就是。
 
+## 去 AI 味（每篇文章都要做）
+
+文章交给用户 review 之前，必须过 sepia：
+- 新写文章用 `sepia:sepia-write`；改已有文章用 `sepia:sepia-refactor`，长文按 `##` 逐节跑；只诊断不改用 `sepia:sepia-review`。
+- 只改措辞。front matter、数字、版本号、命令、代码块、链接、报错原文、术语一字不动，改完对照原文核对。
+- sepia 没跑完或不可用时，不把文章说成已完成，也不提请发布。
+
 ## SEO / GEO（每篇文章都要做）
 
 站点级已配好，不用每次动：jekyll-seo-tag（title/description/canonical/OG/JSON-LD BlogPosting，作者取 `_config.yml` 的 `author`）、`sitemap.xml`、`feed.xml`、`robots.txt`（全放行）、`social_preview_image`（GitHub 头像），以及给 AI 引擎读的 `/llms.txt`（`llms.txt` 模板，自动列出全部文章）。
@@ -41,6 +48,10 @@ tags: [生活]
 站外需要站长本人操作、无法在仓库里完成的：Google Search Console、Bing Webmaster、百度搜索资源平台验证站点，把验证码填进 `_config.yml` 的 `webmaster_verifications`，再在后台提交 `https://redwolf2019.github.io/sitemap.xml`。
 
 ## 发布与验证
+
+**未经用户明确授权，不 commit、不 push。** push 即上线，所以文章和任何改动都先停在本地：写完告诉用户改了哪些文件，等用户 review 并明确说「提交」「发布」之类的话再执行。一次授权只管这一次，下一篇照样要等。
+
+授权后：
 
 ```bash
 git add . && git commit -m "docs: <标题>" && git push
