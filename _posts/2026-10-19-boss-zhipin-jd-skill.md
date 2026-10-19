@@ -1,7 +1,7 @@
 ---
 title: 写一个通用的 Agent Skill，让 AI 在 BOSS直聘上查 JD
 description: 把 BOSS直聘的检索规则写成一份通用的 SKILL.md，Claude Code、Codex 等支持 Skill 的 Agent 都能加载：借浏览器工具在已登录的 Chrome 里翻列表、读详情、还原字体混淆的薪资，把 JD 存成 Markdown。附完整 SKILL.md 和踩过的坑。
-date: 2026-10-19 21:00:00 +0800
+date: 2026-10-19 19:30:00 +0800
 categories: [AI, Agent]
 tags: [Agent Skills, SKILL.md, Claude Code, Codex, BOSS直聘, 浏览器自动化]
 ---
