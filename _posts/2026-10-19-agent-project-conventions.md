@@ -209,3 +209,12 @@ tags: [Claude Code, Codex, Agent, CLAUDE.md, AGENTS.md, 工程规范]
 ````
 
 </details>
+
+## 相关引用
+
+- [CodeGraph](https://github.com/colbymchenry/codegraph)：本地预建的代码知识图谱，第 1 节要求仓库有 `.codegraph/` 时先用它定位代码。
+- [ponytail](https://github.com/DietrichGebert/ponytail)：第 4 节「偷懒阶梯」的出处。
+- [Sepia](https://github.com/Nanako0129/sepia)：第 9 节交付流程里的第一道去 AI 味检查。
+- [Humanizer-zh](https://github.com/op7418/Humanizer-zh)：Humanizer 的中文版，第 9 节交付流程里的最后一轮文字编辑。
+- [rtk](https://github.com/rtk-ai/rtk)：压缩命令输出的 CLI 代理，第 7 节提醒在它下面以退出码为准。
+- [Biome](https://github.com/biomejs/biome)：第 7 节里 `biome check` 所属的格式化和 lint 工具。
