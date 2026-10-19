@@ -13,6 +13,7 @@
 ```markdown
 ---
 title: 文章标题
+description: 一两句话概括文章讲了什么，70～150 字以内
 date: 2026-10-20 20:00:00 +0800
 categories: [随笔]
 tags: [生活]
@@ -22,6 +23,22 @@ tags: [生活]
 
 - `categories` 最多两级，`tags` 随意；分类页、标签页、归档、目录都自动生成。
 - 不要写 `layout: post`，Chirpy 默认就是。
+
+## SEO / GEO（每篇文章都要做）
+
+站点级已配好，不用每次动：jekyll-seo-tag（title/description/canonical/OG/JSON-LD BlogPosting，作者取 `_config.yml` 的 `author`）、`sitemap.xml`、`feed.xml`、`robots.txt`（全放行）、`social_preview_image`（GitHub 头像），以及给 AI 引擎读的 `/llms.txt`（`llms.txt` 模板，自动列出全部文章）。
+
+写或改文章时检查：
+- `description` 必填。它同时是搜索结果摘要、社交卡片描述和 `llms.txt` 里的条目；没写就退回正文第一段。
+- `title` 直接写主题词，别用「第一篇」「杂记」这种搜不到的标题。
+- 正文开头两三句先给结论或要点，AI 引擎摘引时最常取开头。
+- 用 `##` / `###` 分节（也驱动右侧目录），一节讲一件事；步骤用有序列表，对比用表格。
+- 文件名 slug 用英文或拼音短词，它就是 URL（`/posts/<slug>/`）。
+- 配图写 `![说明文字](路径)`，说明文字不留空；需要专属分享图时在 front matter 加 `image: <路径>`。
+- 文章互相引用用站内相对链接，构建时 htmlproofer 会检查死链。
+- 内容有更新时加 `last_modified_at`（不写也会按 git 提交时间生成 dateModified）。
+
+站外需要站长本人操作、无法在仓库里完成的：Google Search Console、Bing Webmaster、百度搜索资源平台验证站点，把验证码填进 `_config.yml` 的 `webmaster_verifications`，再在后台提交 `https://redwolf2019.github.io/sitemap.xml`。
 
 ## 发布与验证
 

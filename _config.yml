@@ -28,8 +28,10 @@ url: "https://redwolf2019.github.io"
 github:
   username: redwolf2019
 
-twitter:
-  username:
+# 站点作者，jekyll-seo-tag 写进 JSON-LD 的 author
+author:
+  name: Redwolf
+  url: https://github.com/redwolf2019
 
 social:
   # Change to your full name.
@@ -102,7 +104,7 @@ avatar: https://avatars.githubusercontent.com/redwolf2019
 
 # The URL of the site-wide social preview image used in SEO `og:image` meta tag.
 # It can be overridden by a customized `page.image` in front matter.
-social_preview_image: # string, local or CORS resources
+social_preview_image: https://avatars.githubusercontent.com/redwolf2019
 
 # boolean type, the global switch for TOC in posts.
 toc: true

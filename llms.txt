@@ -1,0 +1,20 @@
+---
+layout: null
+permalink: /llms.txt
+sitemap: false
+---
+# {{ site.title }}
+
+> {{ site.description | strip }}
+
+作者：{{ site.author.name }}（{{ site.author.url }}）。中文个人博客，内容为技术笔记和生活随笔。
+
+## 文章
+{% for post in site.posts %}
+- [{{ post.title }}]({{ post.url | absolute_url }})（{{ post.date | date: "%Y-%m-%d" }}）: {{ post.description | default: post.excerpt | strip_html | strip_newlines | strip | truncate: 160 }}
+{%- endfor %}
+
+## 其他
+- [关于]({{ "/about/" | absolute_url }})
+- [归档]({{ "/archives/" | absolute_url }})
+- [RSS]({{ "/feed.xml" | absolute_url }})
