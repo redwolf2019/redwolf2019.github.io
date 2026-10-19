@@ -145,10 +145,34 @@ Agent 会先认出这是 `boss-jd-search` 的活，读 Skill，然后：
 请读取 https://raw.githubusercontent.com/redwolf2019/redwolf2019.github.io/main/_posts/2026-10-19-boss-zhipin-jd-skill.md ，把「完整的 SKILL.md」一节里 markdown 代码块的内容原样保存为你的 Skill 目录下的 boss-jd-search/SKILL.md（Claude Code 是 ~/.claude/skills/，Codex 是 ~/.agents/skills/，其他 Agent 用你自己的 Skill 目录），保存后告诉我文件路径，再检查你有没有能操作我已登录 Chrome 的浏览器工具。
 ```
 
+## 推荐用法：让 Agent 每天查一次新岗位
+
+Skill 装好以后，可以让 Agent 隔一段时间自动跑一遍，比如每天一次，只记新出现的岗位。别设得太勤，BOSS 有反爬，一天一次足够了。
+
+在 Claude Code 里用 `/loop`：
+
+```text
+/loop 1d 用 boss-jd-search 搜杭州的产品经理岗位，薪资下限 30K，只记 jobs/ 里以前没出现过的新岗位
+```
+
+间隔支持 `m`、`h`、`d` 几种单位。`/loop` 只在当前会话里有效，Claude Code 关掉就停了；循环任务创建 7 天后自动过期，想继续就重新建一个。
+
+其他 Agent 的做法不一样。不管用哪个，有一条前提不变：任务得跑在你自己的电脑上，Chrome 开着并保持登录。跑在云端的定时任务碰不到你本机的浏览器，这个场景用不了。
+
+| Agent | 定时方式 | 能不能用在这里 |
+|---|---|---|
+| Claude Code | 会话里用 `/loop 1d <提示词>` | 能。会话内有效，7 天过期 |
+| Codex | 桌面 app 里的定时任务（Scheduled tasks），可选每天、每周或自定义；Codex CLI 没有这个管理界面 | 能。任务要选本地项目目录，电脑开着、app 运行着；定时任务可以调用 Skill |
+| Cursor | Automations，预设间隔或 cron 表达式 | 不合适。Automations 跑的是云端 agent，碰不到本机已登录的 Chrome |
+| Gemini CLI 等没有内置定时的 | 用系统的 cron、launchd 或 Windows 任务计划程序，定时调用非交互模式，比如 `gemini -p "<提示词>"`；`claude -p`、`codex exec` 同理 | 可以试。非交互模式下浏览器工具也要配好，这条路我没实际跑过 |
+
 ## 相关引用
 
 - [Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)：Anthropic 讲 Skill 原理的工程博客。核心是渐进式披露：Agent 平时只把每个 Skill 的 `name` 和 `description` 放进上下文，用得上时才读 `SKILL.md` 正文，正文里引用的其他文件再按需读。
 - [Agent Skills 规范](https://agentskills.io/specification)：Skill 的开放标准，规定了 `SKILL.md` 的 front matter 字段和目录结构。
 - [Claude Code 的 Skill 文档](https://code.claude.com/docs/en/skills)：Skill 放在哪、怎么触发，以及 Claude Code 在标准之外加的功能。
 - [Codex 的 Skill 文档](https://developers.openai.com/codex/skills)：Codex 扫描 Skill 的目录，包括用户级的 `~/.agents/skills/` 和仓库里的 `.agents/skills/`。
+- [Claude Code 的定时任务文档](https://code.claude.com/docs/en/scheduled-tasks)：`/loop` 的写法、间隔单位和 7 天过期规则。
+- [Codex 定时任务文档](https://developers.openai.com/codex/app/automations)：在桌面 app 里建定时任务，本地任务需要电脑开着、app 运行。
+- [Cursor Automations 文档](https://cursor.com/docs/cloud-agent/automations)：定时触发的写法，以及它跑在云端 agent 上这一点。
 - [anthropics/skills](https://github.com/anthropics/skills)：Anthropic 官方的 Skill 示例仓库，写自己的 Skill 前可以照着看。
