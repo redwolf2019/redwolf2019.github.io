@@ -1,7 +1,7 @@
 ---
 title: ReAct 还是 Plan-and-Execute：Agent 的两种控制流，以及什么时候根本不用 Agent
 description: 对照 Anthropic《Building effective agents》讲工作流与 Agent 的分界和不用 Agent 的判断顺序；用 Go 小程序让同一问题跑 ReAct 和 Plan-and-Execute，对比轨迹与模型调用次数；从后端看两种模式对状态表、恢复粒度和人工确认点的影响。
-date: 2026-10-22 22:00:00 +0800
+date: 2026-10-22 20:00:00 +0800
 categories: [AI, Agent]
 tags: [Go, Agent, ReAct, Plan-and-Execute, 工作流, LLM]
 mermaid: true
