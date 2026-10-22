@@ -90,7 +90,7 @@ flowchart LR
 
 ### 名字从哪来
 
-ReAct 是 Reasoning 加 Acting，出自 Yao 等人的论文《ReAct: Synergizing Reasoning and Acting in Language Models》（ICLR 2023）。它要解决的问题很具体：只让模型推理（chain-of-thought）会编造事实，因为它接触不到外部信息；只让模型行动（act-only）又拿不出连贯的答案。论文的做法是让模型交替输出两种东西，一段推理文字（Thought）和一个动作（Action）；动作由程序执行，结果（Observation）追加回提示词，模型接着输出下一段 Thought。在 HotpotQA 问答任务里动作就三个：`search[实体]`、`lookup[字符串]`、`finish[答案]`，背后接的是维基百科的 API。
+ReAct 是 Reasoning 加 Acting，出自 Yao 等人的论文《ReAct: Synergizing Reasoning and Acting in Language Models》（ICLR 2023）。它要解决的问题很具体：只让模型推理（chain-of-thought）会编造事实，因为它接触不到外部信息；只让模型行动（act-only）又拿不出连贯的答案。论文的做法是让模型交替输出两种东西，一段推理文字（Thought）和一个动作（Action）；动作由程序执行，结果（Observation）追加回提示词，模型接着输出下一段 Thought。以 HotpotQA 问答任务为例，论文给模型接了一个简化的维基百科接口，Action 只有三种：`search[实体]` 返回这个词条页面的开头几句，`lookup[字符串]` 在当前页面里找下一句包含该字符串的句子，`finish[答案]` 交出答案、结束任务。模型拿到的外部信息，就是靠前两种动作查回来的。
 
 论文报告 ReAct 在 ALFWorld 和 WebShop 两个交互任务上，成功率比模仿学习和强化学习方法分别高 34 和 10 个百分点，只用了一两个示例。数字是 2022 年的，模型也是当时的。但「想一步、做一步、看一眼」这个结构一直用到现在，所有带工具调用的聊天 API，跑的都是它。
 
