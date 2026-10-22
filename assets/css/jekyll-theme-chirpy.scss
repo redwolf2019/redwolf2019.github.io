@@ -1,0 +1,32 @@
+---
+---
+
+$jetbrains-mono: ('JetBrains Mono', 'Microsoft Yahei', sans-serif);
+
+@use 'abstracts/variables' with (
+  $theme: '{{ site.theme_mode }}',
+  $font-family-base: $jetbrains-mono,
+  $font-family-heading: $jetbrains-mono
+);
+
+/* prettier-ignore */
+@use 'main
+{%- if jekyll.environment == 'production' -%}
+  .bundle
+{%- endif -%}
+';
+
+/* append your custom style below */
+
+:root {
+  --bs-font-monospace: 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* the theme hardcodes Lato / Oswald / sans-serif on these */
+#archives .date.day,
+.pagination,
+kbd,
+.tag span,
+#topbar-title {
+  font-family: $jetbrains-mono;
+}
