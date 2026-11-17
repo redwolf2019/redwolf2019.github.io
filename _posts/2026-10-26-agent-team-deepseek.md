@@ -11,7 +11,7 @@ Claude Code 的 Agent Teams 能让几个 Claude Code 会话组成一个小团队
 
 这篇用一次实跑把整个过程走一遍：我把 Claude Code 接到 DeepSeek，让一个 lead 带三个 teammate 合写一个 600 多行的 Go 程序，再把同一份需求交给单个会话做一次，对比两边的过程、花费和代码。
 
-先说结果。Agent Team 用了 16 分钟，按 token 用量和 DeepSeek 官方价格算约 3.55 元；单会话 4 分钟写完，约 0.48 元。两边的代码都能编译运行，但单会话的版本留着一个 bug：程序被中途取消时，它会把没做完的任务记成已完成。Team 里负责测试的 teammate 在 review 时抓到了同一个 bug，写这段代码的 teammate 改掉了它，测试的 teammate 又补了一个防止它复发的测试。即便如此，这种文件分工清楚、规模不大的活，我认为不值得开 Agent Team，理由在后文「我的判断」一节。
+先说结果。Agent Team 用了 16 分钟，按 token 用量和 DeepSeek 官方价格算约 3.55 元；单会话 4 分钟写完，约 0.48 元。两边的代码都能编译运行，但单会话的版本留着一个 bug：程序被中途取消时，它会把没做完的任务记成已完成。Team 里负责测试的 teammate 在 review 时抓到了同一个 bug，写这段代码的 teammate 改掉后，测试的 teammate 又补了一个防复发的测试。即便如此，这种文件分工清楚、规模不大的活，我认为不值得开 Agent Team，理由在后文「我的判断」一节。
 
 > Anthropic 不正式支持让 Claude Code 跑在非 Claude 模型上，Agent Teams 本身也还是实验功能。这篇记录的是一次能跑通的配置和它的毛病，不保证换个版本还是同样的行为。
 {: .prompt-warning }
@@ -24,17 +24,17 @@ Claude Code 的 Agent Teams 能让几个 Claude Code 会话组成一个小团队
 
 ## Agent Team 是什么
 
-可以把它想成一个小项目组：组长接下需求，拆成任务贴到看板上；组员从看板上领任务干活，接口要对齐就私下商量，干完把任务挪到「已完成」。Agent Team 里的几样东西和项目组一一对应：
+把 Agent Team 想成一个小项目组，里面几样东西刚好一一对应：
 
 | 名称 | 相当于 | 在 Claude Code 里是什么 |
 | --- | --- | --- |
 | lead | 组长 | 你直接对话的那个 Claude Code 会话。它拆任务、拉起 teammate，最后收尾验收 |
-| teammate | 组员 | lead 拉起来的独立 Claude Code 会话，有自己的上下文窗口，也就是模型每一轮能看到的全部对话和文件内容。本文里每个 teammate 占一个 tmux 分屏 |
+| teammate | 组员 | lead 拉起来的独立 Claude Code 会话，有自己的上下文窗口。本文里每个 teammate 占一个 tmux 分屏 |
 | 共享任务列表 | 看板 | 磁盘上的一组 JSON 文件。每个任务记着状态（待办、进行中、已完成）、负责人和依赖，依赖没完成的任务领不了 |
 | 邮箱 | 私信 | 每个成员一个收件文件。成员之间直接发消息，不用经过 lead 转达 |
-| hook | 交付前的检查 | 某个事件发生时自动运行的脚本。本文把它挂在「任务标记完成」上，跑 `go vet` 和 `go test`，不通过就不让标记完成 |
+| hook | 交付前的检查 | 某个事件发生时自动运行的脚本。本文把它挂在任务标记完成时，跑 `go vet` 和 `go test`，不通过就不让标记完成 |
 
-一个团队从开工到解散，大致是下面这个流程，本文的实跑也按这个顺序展开：
+一个团队从开工到解散大致按这个流程走：
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,7 @@ flowchart LR
 
 ## Agent Team 和 subagent 差在哪
 
-Claude Code 里还有一个更早的功能叫 subagent，也是「多开几个 Agent」，两者很容易混。subagent 是主 Agent 临时派出去的帮手，干完把结果交回来就结束，帮手之间互不相识。Agent Team 里每个 teammate 都是一个完整的 Claude Code 会话，有自己的上下文窗口；它们共用一个任务列表，自己认领任务，还能直接给彼此发消息，不必经过 lead 转达。
+Claude Code 里还有一个更早的功能叫 subagent，也是多开几个 Agent，两者很容易混。subagent 是主 Agent 临时派出去的帮手，干完把结果交回来就结束，帮手之间互不相识。Agent Team 里每个 teammate 都是一个完整的 Claude Code 会话，有自己的上下文窗口；它们共用一个任务列表，自己认领任务，还能直接互相发消息，不必经过 lead 转达。
 
 ```mermaid
 flowchart TB
@@ -88,11 +88,11 @@ flowchart TB
 
 文中的命令、配置、对话和输出都来自 2026-10-26 在 macOS 上的实跑：Claude Code v2.1.310、tmux 3.7c、Go 1.26.0。定稿那一轮跑在北京时间 15:28 到 15:50，正好是 DeepSeek 的高峰计价时段，下文的金额都按高峰价算。
 
-有三个坑最容易踩，先列在这里，后文还会细讲：
+有三个坑最容易踩：
 
 - Claude Code 默认只给 Opus 4.7、Sonnet 4.6、Haiku 4.5 及更早的 Claude 模型提供 `TaskCreate` 这组任务工具。换成 DeepSeek 以后，lead 建不了共享任务列表，协调只能靠它派活时一次交代清楚、teammate 发消息汇报，用起来和 subagent 差不多；挂在任务完成上的 `TaskCompleted` hook 也一次都不会触发。启动前要设环境变量 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`。
 - 关闭 teammate 要发专门的关闭请求。lead 用普通消息发「请确认退出」，teammate 回一句「确认退出」，进程却还在。要按官方文档的说法让 lead 去关（「Ask the ... teammate to shut down」），它才会发结构化的 `shutdown_request`，teammate 的分屏这时才关掉。
-- `deepseek-v4-pro` 当 lead 时，第一轮光思考就用了 5 分钟左右，屏幕上只有一行 `Deliberating…`，余额也要过几分钟才扣。我第一次以为请求卡死了，中断后加上调试日志重跑，才看到请求一直在正常进行。
+- `deepseek-v4-pro` 当 lead 时，第一轮光思考就用了 5 分钟左右，屏幕上只有一行 `Deliberating…`，余额也要过几分钟才扣。我第一次以为请求卡死了，中断后加上调试日志重跑，才看到请求一直在正常跑。
 
 ## 全景：Claude Code 怎么接到 DeepSeek
 
@@ -109,7 +109,7 @@ flowchart LR
     T -->|改代码、跑 go test| W["miniteam/ 工作目录"]
 ```
 
-lead 用 pro、teammate 用 flash，这是照着 Anthropic「teammate 用便宜模型」的建议做的对应：lead 要拆任务、做协调，teammate 只写自己那几个文件。DeepSeek 官方给 Claude Code 的配置更省钱，所有槽位都用 `deepseek-flash`，想压成本可以直接照抄它。
+lead 用 pro、teammate 用 flash，是照着 Anthropic「teammate 用便宜模型」的建议配的：lead 要拆任务、做协调，teammate 只写自己那几个文件。DeepSeek 官方给 Claude Code 的配置更省钱，所有槽位都用 `deepseek-flash`，想压成本可以直接照抄。
 
 两个模型当天的价格（人民币，每百万 token，高峰价；北京时间工作日 9–12 点、14–18 点为高峰，其余时段半价）：
 
@@ -120,7 +120,7 @@ lead 用 pro、teammate 用 flash，这是照着 Anthropic「teammate 用便宜�
 
 ## 准备：一个和日常环境隔开的 Claude Code
 
-我平时的 `~/.claude` 里装了一堆插件和 hook，混进演示会让 teammate 的行为不好解释。所以这次用 `CLAUDE_CONFIG_DIR` 指向一个单独的目录，里面只放这次要用的配置。下文为了好读，把这个目录写成 `~/agent-team-demo`（实际跑的是一个临时目录下的绝对路径，hook 的 `command` 也写的是绝对路径）；它在这里的角色，就是平时的 `~/.claude`。
+我平时的 `~/.claude` 里装了一堆插件和 hook，混进演示会让 teammate 的行为不好解释。所以这次用 `CLAUDE_CONFIG_DIR` 指向一个单独的目录，里面只放这次要用的配置。下文为了好读，把这个目录写成 `~/agent-team-demo`（实际跑的是一个临时目录下的绝对路径，hook 的 `command` 也写的是绝对路径），它就相当于平时的 `~/.claude`。
 
 目录结构：
 
@@ -156,7 +156,7 @@ cd "$AT/miniteam"
 tmux -L agentteam new-session -d -s agentteam -x 240 -y 60 claude "$@"
 ```
 
-几行值得解释：
+脚本里有几行配置单独说一下：
 
 - `ANTHROPIC_AUTH_TOKEN` 放 DeepSeek 的 key，同时 `unset ANTHROPIC_API_KEY`，免得 Claude Code 拿错凭据。
 - 带 `[1m]` 后缀的模型名是照 DeepSeek 文档写的，表示用 1M 上下文。
@@ -294,7 +294,7 @@ tmux -L agentteam new-session -d -s agentteam -x 240 -y 60 claude "$@"
 
 ![tmux 分屏，左边是 lead：上方是需求原文和 Thought for 4m 45s，中间显示 2 background agents launched，下方是 tasks-dev 发来的 Bash 审批框，命令是 mkdir -p /tmp/tasksdev-check 再拷贝文件，最底下是任务列表，任务 2 已完成，任务 4 被 1 和 3 阻塞；右上是 tasks-dev 的 pane，显示 Waiting for team lead approval；右下是 agent-dev 的 pane，正在 go build](/assets/img/posts/agent-team-deepseek/team-spawn-permission.png)
 
-这张图和下面两张，是我把定稿运行时每个 pane 的 `tmux capture-pane -e` 输出按原布局拼起来再截图得到的，内容没改过。
+这张图和下面两张，是定稿运行时用 `tmux capture-pane -e` 抓出各 pane 输出、按原布局拼好截出来的，内容没改过。
 
 ### 两个 teammate 自己对接口
 
@@ -302,7 +302,7 @@ tmux -L agentteam new-session -d -s agentteam -x 240 -y 60 claude "$@"
 
 > 确认一致，无任何差异。tasks.go 和 mailbox.go 已写完并 gofmt，go build 仅剩预期的“main 未声明”错误，与你的 model.go/agent.go 类型自洽。补充一点：agent.go 向 "lead" 调用 mb.Send 时，main.go 需先 mb.Register("lead") 或 Recv 一次，否则 Send 返回未注册错误（当前 agent.go 忽略该错误）。
 
-`agent-dev` 回复说这是 `main.go` 的职责，并把这条提醒同步给了 lead。lead 后来写 `main.go` 时，第一件事就是 `mb.Register("lead")`。这是整个过程中我最想看到的一幕：一个集成风险在两个负责人之间被发现，然后交到了该处理它的人手里，我没有插手。
+`agent-dev` 回复说这是 `main.go` 的职责，并把这条提醒同步给了 lead。lead 后来写 `main.go` 时，第一件事就是 `mb.Register("lead")`。这是整个过程中我最想看到的一幕：两个负责人自己发现了集成风险，直接转给该处理的人，我没插手。
 
 ### tester 的 review 抓到一个真 bug
 
@@ -472,7 +472,7 @@ flowchart LR
     T <-->|SendMessage 写入，自动投递| I
 ```
 
-几处和我预想的不一样：
+实际看这些目录和文件，有四处和预想不一样。
 
 - 邮箱文件我每次看都是 `[]`。消息投递以后就从文件里清掉了，想回看对话只能去翻 transcript。
 - 四个任务全部完成后不到半分钟，`1.json` 到 `4.json` 就被删了，目录里只剩 `.highwatermark` 和 `.lock`。文档说任务目录在会话结束后会保留，目录确实还在，里面的任务文件没了。要留档的话，得在跑的过程中自己复制出来。
@@ -481,7 +481,7 @@ flowchart LR
 
 ## 踩过的坑：探索那一轮
 
-定稿之前我先完整跑过一轮，需求只有几处不同。那一轮暴露的问题，就是前面那几处修改的来由。
+定稿之前我先完整跑过一轮，需求只有几处不同。前面改掉的那几条，就是从那一轮踩出来的。
 
 ### 没有任务列表
 
@@ -507,7 +507,7 @@ lead 自始至终没有调用 `TaskCreate`，任务目录一直是空的，hook 
 
 ## 花了多少钱：和单会话比
 
-为了核对「Agent Team 更费 token」到底费多少，我用同一份规格又跑了一次单会话：关掉 Agent Teams，只用 `deepseek-v4-pro`，需求里把三个 teammate 的分工改成「你一个人完成」。token 数取自各会话 transcript 里每次 API 响应的 `usage`，金额按上面的高峰价算：
+为了核对 Agent Team 到底多费多少 token，我用同一份规格又跑了一次单会话：关掉 Agent Teams，只用 `deepseek-v4-pro`，需求里把三个 teammate 的分工改成「你一个人完成」。token 数取自各会话 transcript 里每次 API 响应的 `usage`，金额按上面的高峰价算：
 
 | | Agent Team | 单会话 |
 | --- | --- | --- |
@@ -524,15 +524,15 @@ lead 自始至终没有调用 `TaskCreate`，任务目录一直是空的，hook 
 
 lead 会话里 `/cost` 显示 `$2.82`，那是按 Claude 的价格估的，它自己也注明了 `costs may be inaccurate due to usage of unknown models`。split-pane 模式下 teammate 是独立进程，用量也不算在 lead 的 `/cost` 里。
 
-官方 [成本文档](https://code.claude.com/docs/en/costs#manage-agent-team-costs) 有一句「teammate 在 plan mode 下运行时，Agent Team 大约比标准会话多用 7 倍 token」。我这次的费用比是 3.55 ÷ 0.48 ≈ 7.4 倍，碰巧接近；按 token 算，未命中缓存的输入加输出是 10.3 倍，算上缓存命中是 43 倍。条件也不一样：我没开 plan mode，teammate 用的是更便宜的模型，而且只跑了一次。这个数只能说明，在这种规模的任务上，差距是数倍量级。
+官方 [成本文档](https://code.claude.com/docs/en/costs#manage-agent-team-costs) 有一句「teammate 在 plan mode 下运行时，Agent Team 大约比标准会话多用 7 倍 token」。我这次的费用比是 3.55 ÷ 0.48 ≈ 7.4 倍，碰巧接近；按 token 算，未命中缓存的输入加输出是 10.3 倍，算上缓存命中是 43 倍。只是条件不一样：我没开 plan mode，teammate 用的是更便宜的模型，还只跑了一次，所以这组数只能说明，在这种规模的任务上确实差着好几倍。
 
 钱之外，Agent Team 多花的时间主要在两处：lead 开局思考 5 分钟，tester 要等前两个人写完才派生。写代码的那几段，三个 teammate 是并行的，每个都只用了一两分钟。
 
 ## 我的判断：这类活不值得开 Agent Team
 
-这次的活是 600 行左右、文件边界清楚的代码，我不会再为它开 Agent Team。单会话 4 分钟写完，再派一个 subagent 专门做 review，大概率也能抓到那个 ctx 取消的 bug，总花费应该还在 1 元以内（这是我的推断，没有实跑）。Team 这次多给我的是 review 和 teammate 之间的对话，这两样不必非得靠一个团队来拿。
+这种 600 行左右、文件边界清楚的活，我不会再开 Agent Team。单会话 4 分钟写完，再派一个 subagent 专门做 review，大概率也能抓到那个 ctx 取消的 bug，总花费应该还在 1 元以内，不过这只是推断，没实跑过。Team 这次多出来的，是 review 和 teammate 之间的对话，这两样其实不用拉团队也办得到。
 
-我会改主意的情况：teammate 之间要反复讨论，彼此的结论需要被对方质疑（比如几个人各拿一个假设查一个 bug），或者改动横跨几层、每层都要读很多上下文，单个会话的窗口装不下。
+有两种情况我会改主意：teammate 之间需要反复讨论、互相质疑结论（比如几个人各拿一个假设查一个 bug），或者改动横跨几层、每层都要读很多上下文，单个会话的窗口装不下。
 
 ```mermaid
 flowchart TD
@@ -924,7 +924,7 @@ func RunTeammate(ctx context.Context, name string, tl *TaskList, mb *Mailbox, m 
 }
 ```
 
-`if ctx.Err() != nil { return }` 那段就是 review 之后的修复。单会话写出的版本在这里是这样的：
+`if ctx.Err() != nil { return }` 那段就是 review 之后的修复。单会话写出的版本长这样：
 
 ```go
 result, err := model.Complete(ctx, task.Subject)
@@ -1088,7 +1088,7 @@ func (d *DeepSeek) Complete(ctx context.Context, prompt string) (string, error) 
 }
 ```
 
-`DeepSeek` 用的就是 Anthropic Messages 格式，和 Claude Code 连 DeepSeek 走的是同一个接口。解析响应时只取 `type == "text"` 的块，因为 DeepSeek 默认会返回 `thinking` 块，全拼起来的话，思考过程会混进答案里。这一轮 `agent-dev` 一开始就是这么写的；探索那一轮的版本没过滤，是被 tester 在 review 里指出来的。
+`DeepSeek` 用的就是 Anthropic Messages 格式，和 Claude Code 连 DeepSeek 走的是同一个接口。解析响应时只取 `type == "text"` 的块，因为 DeepSeek 默认会返回 `thinking` 块，全拼起来的话，思考过程会混进答案里。这一轮 `agent-dev` 一开始就这么写了；探索那一轮的版本没过滤，是 tester 在 review 里指出来的。
 
 ### 入口：main.go
 

@@ -8,13 +8,13 @@ mermaid: true
 ---
 这篇是我整理的 Go 运行时底层原理笔记：GMP 调度、channel 与 sync、内存分配与 GC、context、pprof 与 trace 排障，最后是 slice、map、interface、defer 的几个细节。文中代码在 macOS（Apple M2 Max）、Go 1.26.0 下跑过，输出是真实结果，引用的运行时源码也是这个版本的。每段代码都是独立的 `main` 包，复制进一个 `main.go` 就能 `go run`。
 
-一个建议放在前面：每个主题都动手写一小段代码验证，比只看文章记得牢。GMP、GC 的文章看十篇，不如自己用 pprof 抓一次 goroutine 泄漏。
+每个主题都动手写一小段代码验证，比只看文章记得牢。GMP、GC 的文章看十篇，不如自己用 pprof 抓一次 goroutine 泄漏。
 
 ## 一、调度：GMP
 
 ### 原理
 
-G 是 goroutine，M 是系统线程，P 是「处理器」，数量等于 `GOMAXPROCS`，每个 P 带一个本地运行队列（最多 256 个 G）和一份内存分配缓存 mcache。M 必须拿到一个 P 才能跑 G。除了每个 P 的本地队列，还有一个全局队列，和一个存放网络就绪 goroutine 的 netpoll。
+G 是 goroutine，M 是系统线程，P 是处理器，数量等于 `GOMAXPROCS`，每个 P 带一个本地运行队列（最多 256 个 G）和一份内存分配缓存 mcache。M 必须拿到一个 P 才能跑 G。除了每个 P 的本地队列，还有一个全局队列，和一个存放网络就绪 goroutine 的 netpoll。
 
 ```mermaid
 flowchart LR
@@ -202,7 +202,7 @@ flowchart TB
 
 ### 动手验证
 
-已关闭 channel 的行为：
+先看已关闭 channel 的读写行为：
 
 ```go
 package main
@@ -232,7 +232,7 @@ recover: send on closed channel
 
 注意第一行：关闭并不丢弃缓冲里已有的数据，接收方先把剩的取完，之后才开始拿零值。
 
-nil channel 关掉 `select` 分支。把两个 channel 合并成一个，哪个关了就把它置成 nil，这样 `select` 不会在已关闭的 channel 上空转：
+合并两个 channel 时可以用 nil channel 关掉 `select` 分支，哪个关了就置成 nil，这样 `select` 不会在已关闭的 channel 上空转：
 
 ```go
 package main
@@ -283,7 +283,7 @@ func main() {
 
 去掉 `a = nil` 那两行，已关闭的 `a` 会一直就绪，循环空转到 `b` 也关闭为止，`out` 里还会混进零值。
 
-限制并发数的 worker pool，用一个带缓冲的 channel 当信号量：
+要写限制并发数的 worker pool，可以用一个带缓冲的 channel 当信号量：
 
 ```go
 package main
@@ -327,7 +327,7 @@ func main() {
 
 ### 常见问题
 
-**什么时候用 channel，什么时候用锁？** 我的标准：要把数据的所有权从一个 goroutine 交给另一个，或者要表达「某件事发生了」（完成了、超时了），用 channel；多个 goroutine 共同读写同一块状态（计数器、缓存 map、连接池），用锁。业务代码里锁用得比 channel 多得多，channel 主要出现在流水线和超时控制里。如果你写的是流式数据处理，这个比例会反过来。
+**什么时候用 channel，什么时候用锁？** 要把数据的所有权从一个 goroutine 交给另一个，或者表达「某件事发生了」（完成了、超时了），用 channel；多个 goroutine 共同读写同一块状态（计数器、缓存 map、连接池），用锁。一般业务代码里锁用得比 channel 多得多，channel 主要出现在流水线、超时控制或流式数据处理里。
 
 **向已关闭的 channel 发送为什么是 panic 而不是返回错误？** 因为关闭是发送方的事，「接收方关闭 channel」或者「多个发送方中的一个关闭」在设计上就是错的，运行时选择让它早点炸。多发送方的场景用一个额外的 done channel 或 context 通知退出，channel 本身不关或者由唯一的协调者关。
 
@@ -376,7 +376,7 @@ flowchart LR
 
 ### 动手验证
 
-逃逸分析：
+先看几个常见的逃逸场景：
 
 ```go
 package main
@@ -415,7 +415,7 @@ $ go build -gcflags=-m -o /dev/null .
 
 `stackUser` 里的 `u` 没出现在输出里，留在栈上；`heapUser` 返回了地址，`u` 被搬到堆；`fmt.Println(n)` 把 `n` 转成了 `any`，也逃逸了。热路径上一个 `Println` 就是一次堆分配，这是日志库都提供 `Int("key", n)` 这类字段函数的原因。
 
-`GOGC` 和 `GOMEMLIMIT` 的效果。程序分配 2000 个 1 MiB 的块，始终只保留最近 20 个，也就是存活堆大约 20 MiB：
+再看 `GOGC` 和 `GOMEMLIMIT` 的效果。程序分配 2000 个 1 MiB 的块，始终只保留最近 20 个，也就是存活堆大约 20 MiB：
 
 ```go
 package main
@@ -466,7 +466,7 @@ gc 2 @0.000s 4%: 0.008+0.042+0.003 ms clock, 0.10+0.013/0.067/0.001+0.036 ms cpu
 
 三段时间对应 STW 清扫结束、并发标记、STW 标记结束；`6->6->1 MB` 是 GC 开始时的堆、结束时的堆、存活的堆；`6 MB goal` 是这一轮的触发目标。线上看到两个 STW 段变长、或者 goal 不断被突破，就是 GC 跟不上分配速度了。
 
-预分配的收益，用 benchmark 看（`b.Loop` 是 1.24 加的）：
+用 benchmark 看预分配的收益（`b.Loop` 是 1.24 加的）：
 
 ```go
 package prealloc
@@ -607,7 +607,7 @@ func main() {
 
 ## 五、性能分析与排障
 
-这一块光看文章记不住，得亲手走一遍：从指标看到异常、抓 profile、定位到某一行。下面两个练习就是干这个的。
+这一块直接跟着排障流程走：从指标看到异常、抓 profile、定位到某一行。
 
 ### 原理
 
@@ -677,7 +677,7 @@ goroutine profile: total 54
 
 ![goroutine profile 调用图：51 个 goroutine 从 main.leak.func1 经 chansend 停在 runtime.gopark](/assets/img/posts/go-internals/goroutine-leak.png)
 
-一个弯路：我先试的是 `go tool pprof -top`，结果最上面是 `runtime.gopark 98%`，看不出任何东西。goroutine profile 里所有阻塞的 goroutine 最终都停在 `gopark`，要看的是它上面那一层是谁。`debug=1` 的文本或者调用图都比 `-top` 直观。
+我先试的是 `go tool pprof -top`，结果最上面是 `runtime.gopark 98%`，看不出任何东西。goroutine profile 里所有阻塞的 goroutine 最终都停在 `gopark`，要看的是它上面那一层是谁。`debug=1` 的文本或者调用图都比 `-top` 直观。
 
 修法有三种，按场景选：channel 给 1 的缓冲，发送方不会卡住，没人收就让 GC 收走；goroutine 里 `select` 上 `ctx.Done()`，请求结束就退出；或者干脆别起这个 goroutine。
 
@@ -725,7 +725,7 @@ func main() {
 }
 ```
 
-第一次看 `-top` 我又走了弯路：
+先用 `-top` 看输出：
 
 ```text
 $ go tool pprof -top -nodecount=8 cpu cpu.pprof
@@ -751,7 +751,7 @@ $ go tool pprof -peek 'main.countValid$' cpu cpu.pprof
 
 ![pprof 火焰图：main.countValid 下面是 regexp.MustCompile、regexp.compile、syntax.Parse，左侧一大块是 GC 相关的 runtime 调用](/assets/img/posts/go-internals/flamegraph.png)
 
-修法是把正则提到包级别 `var emailRe = regexp.MustCompile(pattern)`，编译一次。这个例子的教训比修法值钱：`-top` 默认按 `flat` 排，运行时的函数经常把业务函数挤出榜单；先按 `cum` 找到自己的入口，再往下看。
+修法是把正则提到包级别 `var emailRe = regexp.MustCompile(pattern)`，编译一次。不过 `-top` 默认按 `flat` 排，运行时的函数经常把业务函数挤出榜单，先按 `cum` 找到自己的入口再往下看。
 
 ### 线上排障的顺序
 
@@ -886,7 +886,7 @@ flowchart LR
     N["真正的 nil 接口：itab 和 data 都是 nil"]
 ```
 
-这个坑的实际形态是：函数声明返回 `error`，内部用一个具体错误类型的指针变量，没出错时 `return e`，调用方 `if err != nil` 永远为真。规则是返回 `error` 的函数在没错时写 `return nil`，不要返回一个可能为 nil 的具体类型。
+写代码时常踩的形态是函数声明返回 `error`，内部却用了一个具体错误类型的指针变量，没出错时 `return e`，调用方 `if err != nil` 就永远为真。返回 `error` 的函数在没错时要写 `return nil`，不要返回一个可能为 nil 的具体类型。
 
 ### defer
 
@@ -930,7 +930,7 @@ func main() {
 
 ### 泛型和循环变量
 
-泛型（1.18 起）适合的场景：容器和算法（`Map`、`Filter`、有序 map、对象池）、不同数值类型共用一个函数。约束用 `cmp.Ordered` 或自己写接口，`any` 约束下不能做比较和运算。不适合用泛型的地方：靠接口和方法就能表达的多态。
+泛型（1.18 起）适合写容器和算法（`Map`、`Filter`、有序 map、对象池），或者让不同数值类型共用一个函数；约束用 `cmp.Ordered` 或自己写接口，`any` 约束下不能做比较和运算。如果多态靠接口和方法就能表达，就没必要用泛型。
 
 循环变量是 1.22 的一个行为变更：之前 `for i := ...` 的 `i` 整个循环共用一个变量，在循环体里起 goroutine 捕获它会全拿到最后一个值；1.22 起每次迭代一个新变量，这个经典坑没了。`go.mod` 里 `go` 指令低于 1.22 的模块还是旧行为。
 

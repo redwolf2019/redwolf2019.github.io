@@ -5,31 +5,31 @@ date: 2026-10-19 19:30:00 +0800
 categories: [AI, Agent]
 tags: [Skill, Agent Skills, SKILL.md, Claude Code, Codex, BOSS直聘, 浏览器自动化]
 ---
-想知道一类岗位都在要什么技能，最直接的办法是去 BOSS直聘把 JD 翻一遍。这活我交给了 Agent，让它翻完再整理成 Markdown。跑通以后，我把整套检索规则写成了一个 Skill，叫 `boss-jd-search`。现在说一句「去 BOSS 上搜上海的数据分析岗位，20K 以上」，Agent 就会在我已登录的 Chrome 里翻列表、逐条点开详情、还原被字体混淆的薪资，最后写出一个 `jobs/<日期>-<关键词>.md`。关键词、城市、薪资每次现给，Skill 不绑定任何职位方向，搜后端、产品还是设计都一样。
+想知道一类岗位都在要什么技能，最直接的办法是去 BOSS直聘把 JD 翻一遍。这活我交给了 Agent，让它翻完再整理成 Markdown。跑通以后，我把整套检索规则写成了一个 Skill，叫 `boss-jd-search`。现在说一句「去 BOSS 上搜上海的数据分析岗位，20K 以上」，Agent 就会在我已登录的 Chrome 里翻列表、逐条点开详情、还原被字体混淆的薪资，最后写出一个 `jobs/<日期>-<关键词>.md`。关键词、城市和薪资每次现给，Skill 不绑定职位方向。
 
-这个 Skill 不绑定哪家 Agent，Claude Code、Codex 都能加载。我自己是用 Claude Code 加 Claude in Chrome 跑通的，文中跟这套工具有关的限制都会单独标出来。
+这个 Skill 不限哪家 Agent，Claude Code、Codex 都能加载。我自己是用 Claude Code 加 Claude in Chrome 跑通的，文中跟这套工具有关的限制都会单独标出来。
 
 这套做法有三条底线：不写爬虫，不调接口，不碰「立即沟通」。Agent 只是替我在浏览器里点和读，节奏放慢，遇到验证码就停下来叫我。
 
 ## 准备工作
 
-1. **一个支持 Skill 的 Agent。** `SKILL.md` 就是一个带 `name`、`description` front matter 的 Markdown 文件，格式是公开的 Agent Skills 标准，各家按目录找它：Claude Code 读 `~/.claude/skills/`，Codex 读 `~/.agents/skills/`。我把 Skill 实际放在 `~/.agents/skills/boss-jd-search/`，再软链一份到 `~/.claude/skills/`，一份文件两边用，改一处就行。
-2. **一个能操作你那个 Chrome 的浏览器工具。** 它要能打开网页、在页面里执行 JS、读页面文本，而且操作的必须是你已经登录 BOSS 的那个浏览器。新起一个干净的浏览器实例是没有登录态的。我用的是 Claude in Chrome 扩展，靠它的 `navigate`、`javascript_tool`、`get_page_text` 干活。用别的 Agent，就接一个能连上正在运行的 Chrome 的 MCP，比如 Chrome DevTools MCP。这个组合我没实际跑过，下面那些限制要自己重新测。
-3. **在 Chrome 里手动登录 BOSS直聘。** 没登录时列表页不显示薪资。
+1. 先要有支持 Skill 的 Agent。`SKILL.md` 就是一个带 `name`、`description` front matter 的 Markdown 文件，格式是公开的 Agent Skills 标准，各家按目录找它：Claude Code 读 `~/.claude/skills/`，Codex 读 `~/.agents/skills/`。我把 Skill 实际放在 `~/.agents/skills/boss-jd-search/`，再软链一份到 `~/.claude/skills/`，一份文件两边用，改一处就行。
+2. 浏览器工具得能操作正在用的 Chrome，支持打开网页、在页面里执行 JS、读页面文本，而且必须是已经登录 BOSS 的那个浏览器，另开新浏览器没有登录态。我用的是 Claude in Chrome 扩展，靠它的 `navigate`、`javascript_tool`、`get_page_text` 干活。用别的 Agent，就接一个能连上运行中 Chrome 的 MCP，比如 Chrome DevTools MCP。这个组合我没实际跑过，下面那些限制要自己重新测。
+3. 在 Chrome 里手动登录 BOSS直聘，没登录时列表页不显示薪资。
 
 ## 页面上踩过的坑
 
 下面这些是 2026 年 10 月实测的，BOSS 改版后可能失效。列表页 URL、城市码和全部选择器都写在后面的 SKILL.md 里，这里只讲费了点工夫的几处。
 
-**薪资是混淆字体。** `.job-salary` 的 textContent 里，数字 0–9 被换成了私有区字符 U+E031 到 U+E03A，页面靠 kanzhun 字体把它们画成数字。直接读出来是一串方块，按编码减 `0xe031` 就能还原：
+薪资用了混淆字体。`.job-salary` 的 textContent 里，数字 0–9 被换成了私有区字符 U+E031 到 U+E03A，页面靠 kanzhun 字体把它们画成数字。直接读出来是一串方块，按编码减 `0xe031` 就能还原：
 
 ```js
 const decode = s => s.replace(/[\ue031-\ue03a]/g, c => c.charCodeAt(0) - 0xe031);
 ```
 
-**筛选不能全信页面。** URL 里的 `salary=406` 是 20-50K 档，筛得很松，下限要自己再过一遍。本地结果不够时，BOSS 还会往列表里塞别的城市的岗位，写文件前要按 `.company-location` 再筛一次城市。
+页面的筛选不能全信。URL 里的 `salary=406` 是 20-50K 档，筛得很松，下限要自己再过一遍。本地结果不够时，BOSS 还会往列表里塞别的城市的岗位，写文件前要按 `.company-location` 再筛一次城市。
 
-**数据怎么拿出来，这个坑最深，而且是 Claude in Chrome 特有的。** `javascript_tool` 每次调用最多跑 45 秒，返回内容超过一千五百字左右就被截断，带上职位描述，两三条 JD 就超了。我试过从页面直接往本机 localhost 发数据，被权限拦了，这条路走不通。最后用了个笨办法：
+最深的坑是怎么把数据拿出来，这是 Claude in Chrome 特有的限制。`javascript_tool` 每次调用最多跑 45 秒，返回内容到一千五百字左右就被截断，带上职位描述，两三条 JD 就超了。我试过从页面直接往本机 localhost 发数据，被权限拦了，这条路走不通。最后用了个笨办法：
 
 1. 每次执行 JS 只处理几张卡片，读到的数据追加进 `sessionStorage`，返回值只报个数。
 2. 全部采完后，把 `sessionStorage` 里的 JSON 写进页面上的一个 `<pre>`。
@@ -104,9 +104,9 @@ description: 在 BOSS直聘（zhipin.com）检索岗位 JD，通过浏览器工�
 
 ## 几条规则为什么写死
 
-- **只读。** 「立即沟通」按钮就在详情旁边，点一下就是以我的名义给 HR 打了招呼。这种事我不想交给 Agent 判断，所以写成硬规则，要做也得我每次点头。
-- **照抄原文。** 「熟悉 SQL，能用 Python 做数据清洗」这种原话，正是改简历时要对齐的关键词。缩成「有数据处理能力」，这份文件就没用了。
-- **检索条件不落盘。** 城市和薪资期望属于个人信息，我宁可每次多回答一遍，也不让它写进文件。
+- 只读必须写成硬规则。「立即沟通」按钮就在详情旁边，点一下就是以我的名义给 HR 打了招呼，这种事我不想交给 Agent 判断，要做也得我每次点头。
+- 技能和薪资得照抄原文。「熟悉 SQL，能用 Python 做数据清洗」这种原话，正是改简历时要对齐的关键词；缩成「有数据处理能力」，这份文件就没用了。
+- 检索条件不落盘，因为城市和薪资期望属于个人信息，我宁可每次多回答一遍，也不让它写进文件。
 
 ## 跑起来是什么样
 
@@ -157,7 +157,7 @@ Skill 装好以后，可以让 Agent 隔一段时间自动跑一遍，比如每�
 
 间隔支持 `m`、`h`、`d` 几种单位。`/loop` 只在当前会话里有效，Claude Code 关掉就停了；循环任务创建 7 天后自动过期，想继续就重新建一个。
 
-其他 Agent 的做法不一样。不管用哪个，有一条前提不变：任务得跑在你自己的电脑上，Chrome 开着并保持登录。跑在云端的定时任务碰不到你本机的浏览器，这个场景用不了。
+换别的 Agent 定时跑也一样，前提是任务跑在你自己的电脑上，Chrome 开着并保持登录；跑在云端的定时任务碰不到本机浏览器。
 
 | Agent | 定时方式 | 能不能用在这里 |
 |---|---|---|
@@ -168,7 +168,7 @@ Skill 装好以后，可以让 Agent 隔一段时间自动跑一遍，比如每�
 
 ## 相关引用
 
-- [Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)：Anthropic 讲 Skill 原理的工程博客。核心是渐进式披露：Agent 平时只把每个 Skill 的 `name` 和 `description` 放进上下文，用得上时才读 `SKILL.md` 正文，正文里引用的其他文件再按需读。
+- [Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)：Anthropic 讲 Skill 原理的工程博客，里面介绍的渐进式披露，就是 Agent 平时只把每个 Skill 的 `name` 和 `description` 放进上下文，用得上时才读 `SKILL.md` 正文，正文里引用的其他文件再按需读。
 - [Agent Skills 规范](https://agentskills.io/specification)：Skill 的开放标准，规定了 `SKILL.md` 的 front matter 字段和目录结构。
 - [Claude Code 的 Skill 文档](https://code.claude.com/docs/en/skills)：Skill 放在哪、怎么触发，以及 Claude Code 在标准之外加的功能。
 - [Codex 的 Skill 文档](https://developers.openai.com/codex/skills)：Codex 扫描 Skill 的目录，包括用户级的 `~/.agents/skills/` 和仓库里的 `.agents/skills/`。

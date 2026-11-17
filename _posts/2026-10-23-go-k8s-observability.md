@@ -9,7 +9,7 @@ render_with_liquid: false
 ---
 [之前那篇](/posts/agent-loop-go/)写的 Agent 只在本机 `go run` 过。这篇把一个结构相同的 Go 服务搬上 Kubernetes（下文简称 K8s），再给它装上指标、链路追踪和结构化日志，最后故意让其中一个工具变慢，只靠看板、链路和日志把它找出来。
 
-先说几个跟着做下来最有用的结论：
+核心实测结果先列在前面。
 
 - 滚动更新时请求报错，主要是 Pod 退出和流量摘除之间有个时间差。只配 readiness 探针，600 个请求里还是失败 11 个；加上 5 秒的 `preStop`，失败数变成 0。
 - 把 5% 的文档查询拖慢 2 秒，任务平均耗时从 0.229 秒涨到 0.263 秒，几乎看不出来；P99 从 0.494 秒涨到 1.64 秒，告警两分钟后触发。
@@ -25,7 +25,7 @@ render_with_liquid: false
 
 不需要先懂 K8s 的架构原理。etcd 怎么存数据、调度器怎么打分，这些等会用、会排障以后再看也不迟。这篇的目标就两件事：会用，会排障。
 
-做完以后，你手上会有：
+做完后会搭出这些环境和实验。
 
 1. 一个三节点的本地集群，上面跑着两个 Go 服务，配好了探针、资源限制、自动扩缩容和对外入口。
 2. 一套 Prometheus + Grafana + Jaeger，以及一个能看出问题的看板和两条告警规则。
@@ -46,7 +46,7 @@ flowchart LR
     end
 ```
 
-`agent` 是主角，一个模拟出来的 Agent 服务：收到问题后先「调用模型」决定要不要用工具，再调工具，最后「调用模型」生成回答。模型是假的，按关键词做决定，所以不需要 API Key。它有两个工具：`get_weather` 在进程内查一张写死的表；`search_docs` 要通过 HTTP 调另一个服务 `search`。多一个服务，是为了演示请求跨服务时链路怎么串起来，也方便后面让「下游变慢」。
+核心是 `agent`，一个模拟出来的 Agent 服务：收到问题后先调用模型决定要不要用工具，再调工具，最后调用模型生成回答。模型是假的，按关键词做决定，所以不需要 API Key。它有两个工具：`get_weather` 在进程内查一张写死的表；`search_docs` 要通过 HTTP 调另一个服务 `search`。多一个服务，是为了演示请求跨服务时链路怎么串起来，也方便后面让下游变慢。
 
 ## 先认几个词
 
@@ -55,7 +55,7 @@ K8s 里的东西都叫「对象」，用 YAML 描述。这篇会用到下面这�
 | 对象 | 一句话解释 | 在本文里干什么 |
 | --- | --- | --- |
 | Pod | 最小的调度单位，里面跑一个或几个容器，共享网络 | 每个 agent 实例就是一个 Pod |
-| Deployment | 声明「我要几个什么样的 Pod」，负责滚动更新和回滚 | 管理 agent 和 search |
+| Deployment | 声明需要几个什么样的 Pod，负责滚动更新和回滚 | 管理 agent 和 search |
 | ReplicaSet | Deployment 每个版本对应一个，负责把 Pod 数量维持在期望值 | 滚动更新时能看到新旧两个 |
 | Service | 给一组 Pod 一个固定的名字和虚拟 IP，做负载均衡 | `http://search:8080` 就是靠它 |
 | ConfigMap / Secret | 把配置和密钥从镜像里拿出来，注入成环境变量或文件 | 放 `SEARCH_URL` 和假的 API Key |
@@ -154,7 +154,7 @@ demo-worker          Ready    <none>          21s   v1.37.0
 demo-worker2         Ready    <none>          21s   v1.37.0
 ```
 
-所谓「节点」，就是三个 Docker 容器：
+这里的节点就是三个 Docker 容器：
 
 ```text
 $ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
@@ -481,9 +481,9 @@ func main() {
 }
 ```
 
-这里有三个后面会用到的设计：
+代码里留了几个后面实验要用的设计。
 
-- 启动后要「预热」3 秒，假装在加载提示词模板。这 3 秒里进程已经在监听端口，但任务接口返回 503。很多真实服务都是这样，要先建连接池、加载缓存，才能接活。
+- 启动后要预热 3 秒，假装在加载提示词模板。这 3 秒里进程已经在监听端口，但任务接口返回 503。很多真实服务都是这样，要先建连接池、加载缓存，才能接活。
 - 两个健康检查接口。`/healthz` 只要进程还能响应就返回 ok；`/readyz` 要等预热完成才返回 ok。为什么要分两个，讲探针时细说。
 - 没设 `SEARCH_URL` 就直接退出。缺关键配置时宁可起不来，也别带着错误配置跑。
 
@@ -530,8 +530,6 @@ COPY --from=build /out/ /
 EXPOSE 8080
 ENTRYPOINT ["/agent"]
 ```
-
-逐行看几个要点：
 
 - `COPY go.* ./` 再 `go mod download`，依赖单独成一层。只改业务代码时这一层走缓存，不用重新下载依赖。现在还没有第三方依赖，`go.sum` 不存在，用通配符正好两种情况都兼容。
 - `CGO_ENABLED=0` 编出纯静态二进制，不依赖 libc，这样才能放进 distroless 的 static 镜像。
@@ -664,11 +662,11 @@ spec:
       targetPort: http
 ```
 
-两个文件结构一样，以 agent 为例，几个容易混的字段：
+两个文件结构一样，拿 agent 的配置解释几个容易混的字段。
 
 | 字段 | 作用 |
 | --- | --- |
-| `spec.selector.matchLabels` | Deployment 靠这组标签认领「自己的」Pod，必须和 `template.metadata.labels` 对得上，否则 apply 直接报错 |
+| `spec.selector.matchLabels` | Deployment 靠这组标签认领自己的 Pod，必须和 `template.metadata.labels` 对得上，否则 apply 直接报错 |
 | `spec.template` | Pod 的模板。它一改（换镜像、改环境变量），就会触发一次滚动更新 |
 | `containers[].ports[].name` | 给端口起个名字，Service 的 `targetPort` 和后面的探针都可以按名字引用，改端口号时只改一处 |
 | Service 的 `selector` | Service 把流量发给带 `app: agent` 标签的 Pod。它不认 Deployment，只认标签 |
@@ -857,7 +855,7 @@ NAME          ADDRESSTYPE   PORTS   ENDPOINTS                          AGE
 agent-txzlk   IPv4          8080    10.244.2.2,10.244.1.3,10.244.2.4   64s
 ```
 
-后面讲探针和滚动更新时，「Pod 在不在这个列表里」是关键。
+后面讲探针和滚动更新时，关键就看 Pod 在不在这个列表里。
 
 ### Gateway API：Ingress 的接班人
 
@@ -913,7 +911,7 @@ spec:
           port: 8080
 ```
 
-Gateway 是「入口」，HTTPRoute 是「规则」：路径以 `/v1` 开头的请求转给 agent Service。拆成两个对象，是为了让管集群的人管入口，写业务的人管自己的路由。
+Gateway 管入口，HTTPRoute 定规则：路径以 `/v1` 开头的请求转给 agent Service。拆成两个对象，是为了让管集群的人管入口，写业务的人管自己的路由。
 
 ```text
 $ kubectl apply -f deploy/gateway.yaml
@@ -969,7 +967,7 @@ agent-5b6cf9bc4c   0         0         0       2m22s
 
 （`-w` 的原始输出有二十多行，这里删掉了一些中间状态。）
 
-新 ReplicaSet 一个个加，旧的一个个减。节奏由 Deployment 的两个参数控制，默认都是 25%：`maxSurge` 是最多能比期望副本数多出几个，`maxUnavailable` 是最多允许几个不可用。3 个副本时，25% 向上取整是 1，向下取整是 0，所以过程是「先多起一个新的，就绪后再删一个旧的」。
+新 ReplicaSet 一个个加，旧的一个个减。节奏由 Deployment 的两个参数控制，默认都是 25%：`maxSurge` 是最多能比期望副本数多出几个，`maxUnavailable` 是最多允许几个不可用。3 个副本时，25% 向上取整是 1，向下取整是 0，所以过程是先多起一个新的，就绪后再删一个旧的。
 
 旧的 ReplicaSet 没有被删，副本数变成 0 留着，回滚就靠它：
 
@@ -994,11 +992,11 @@ $ curl -s -X POST localhost:30080/v1/tasks -d '{"question":"你好"}'
 {"answer":"我只会查天气和 K8s 文档。","steps":1,"tools":[],"pod":"agent-5b6cf9bc4c-qrph9","version":"v1"}
 ```
 
-回滚其实是「把旧模板再发布一次」，所以 revision 1 变成了 3。`CHANGE-CAUSE` 来自那个注解，不写就是 `<none>`，到时候只能对着一串数字猜每个版本改了什么。
+回滚其实是把旧模板再发布一次，所以 revision 1 变成了 3。`CHANGE-CAUSE` 来自那个注解，不写就是 `<none>`，到时候只能对着一串数字猜每个版本改了什么。
 
 `rollout undo` 适合救急。救完要记得把 YAML 也改回去：集群里跑的是 v1，`deploy/agent.yaml` 里写的还是 v2，下次 apply 又会滚回 v2。kubectl 执行 undo 时也会提醒这一点（`Rolling back will not update the kubectl.kubernetes.io/last-applied-configuration annotation`）。用 Git 管 YAML 的团队，更常见的做法是 revert 那次提交再 apply。
 
-还有个现象值得留意：这次滚动更新从开始到结束只用了 2 秒。新 Pod 起来 1 秒就被当成「就绪」，旧 Pod 随即被删，可我们的服务要预热 3 秒才能接活。这个问题先记着，讲探针时用压测把它暴露出来。
+还有个现象值得留意：这次滚动更新从开始到结束只用了 2 秒。新 Pod 起来 1 秒就被当成就绪，旧 Pod 随即被删，可我们的服务要预热 3 秒才能接活。这个问题先记着，讲探针时用压测把它暴露出来。
 
 ## 配置和密钥：ConfigMap、Secret
 
@@ -1057,7 +1055,7 @@ sk-demo-not-a-real-key
 
 能 `get secret` 的人就能看到明文。Secret 的价值在于它是单独的对象，可以用 RBAC 单独控制谁能读，也可以在 etcd 层开启静态加密。生产环境的密钥一般放在外部密钥管理系统里，再用 External Secrets 之类的工具同步进来；`agent-secret.yaml` 这种带明文的文件，别提交到 Git 仓库。
 
-还有两点：
+环境变量注入还有两个细节要留意。
 
 - 环境变量只在容器启动时读一次。改了 ConfigMap，跑着的 Pod 不会变，要 `kubectl rollout restart deploy/agent` 才生效。挂成文件的 ConfigMap 会自动更新，但程序得自己重新读。
 - 进程里除了这两个，还能看到 `SEARCH_SERVICE_HOST`、`SEARCH_PORT` 这类变量。这是 K8s 为同命名空间的每个 Service 自动注入的老机制，现在都用 DNS，不用管它。Service 多了嫌乱，可以在 Pod 上设 `enableServiceLinks: false` 关掉。
@@ -1163,7 +1161,7 @@ $ kubectl describe pod memory-hog | sed -n '/State:/,/Restart Count/p'
 
 退出码 137 = 128 + 9，也就是被 SIGKILL 杀掉的，进程连打日志的机会都没有。所以碰到 OOMKilled，日志里往往什么都看不到，要看 `describe` 里的 `Reason`。真碰上了，先分清两种情况：内存一直涨，是泄漏，调大 limits 只能推迟它；内存稳定在某个水平但超过了 limits，那就是 limits 定小了。
 
-Go 程序还要多一步：Go 的 GC 默认不知道容器的内存上限，堆还没到触发 GC 的阈值，容器可能已经被杀了。`GOMEMLIMIT` 告诉运行时「总内存尽量别超过这个数」，接近时 GC 会更积极。我设成 limits 的九成左右，给栈、运行时自身留点余量。它是软限制，挡不住真正的泄漏。
+Go 程序还要多一步：Go 的 GC 默认不知道容器的内存上限，堆还没到触发 GC 的阈值，容器可能已经被杀了。`GOMEMLIMIT` 告诉运行时总内存尽量别超过这个数，接近时 GC 会更积极。我设成 limits 的九成左右，给栈、运行时自身留点余量。它是软限制，挡不住真正的泄漏。
 
 ### CPU 的 limits，我这里不设
 
@@ -1175,7 +1173,7 @@ CPU 超 limits 不会被杀，而是被限流：Linux 的 CFS 按 100 毫秒一�
 
 ## 滚动更新为什么会丢请求
 
-这一节是 K8s 部分我最想让你亲手做一遍的。上面那次滚动更新看起来很顺，因为没有流量。现在一边压测一边滚动重启，看看会发生什么。
+上面那次滚动更新看起来很顺，因为没有流量。现在一边压测一边滚动重启，看看会发生什么。
 
 ### 压测脚本
 
@@ -1219,9 +1217,9 @@ kubectl rollout restart deploy/agent
 
 ### 503：新 Pod 还没准备好就接了流量
 
-没有 readiness 探针时，容器一启动 K8s 就认为 Pod 就绪，马上把它加进 Service 的后端。我们的服务要预热 3 秒，这 3 秒里进来的请求只能拿到 503。前面那次「2 秒就滚完」的更新也是这个原因：K8s 以为新 Pod 早就好了。
+没有 readiness 探针时，容器一启动 K8s 就认为 Pod 就绪，马上把它加进 Service 的后端。我们的服务要预热 3 秒，这 3 秒里进来的请求只能拿到 503。前面那次 2 秒就滚完的更新也是这个原因：K8s 以为新 Pod 早就好了。
 
-readiness 探针就是告诉 K8s「什么时候可以给我流量」。在 `deploy/agent.yaml` 的容器里加上：
+readiness 探针用来告诉 K8s 什么时候可以给 Pod 发流量。在 `deploy/agent.yaml` 的容器里加上：
 
 ```yaml
           readinessProbe:
@@ -1257,7 +1255,7 @@ sequenceDiagram
     Note over KL: 超过 terminationGracePeriodSeconds 默认 30 秒还没退出，就发 SIGKILL
 ```
 
-左边「摘流量」要经过 EndpointSlice 控制器、再到每个节点上的 kube-proxy 改 iptables 规则，有延迟；右边「停容器」几乎是立刻的。v1 的程序没处理 SIGTERM，Go 程序收到它默认直接退出，于是出现一个窗口：进程已经没了，转发规则还没改，新连接打过去就被拒绝，正在处理的请求被切断。
+左边摘流量要经过 EndpointSlice 控制器、再到每个节点上的 kube-proxy 改 iptables 规则，有延迟；右边停容器几乎是立刻的。v1 的程序没处理 SIGTERM，Go 程序收到它默认直接退出，于是出现一个窗口：进程已经没了，转发规则还没改，新连接打过去就被拒绝，正在处理的请求被切断。
 
 这个窗口有两种补法，效果从表里能看出来。
 
@@ -1381,7 +1379,7 @@ $ kubectl describe pod -l app=bad-liveness
 
 startupProbe 给了最多 30 秒的启动时间；通过以后 liveness 接手，30 秒没响应才重启；readiness 连续 2 次失败就摘流量。
 
-到这里，`deploy/agent.yaml` 的完整内容是这样（镜像换成了带优雅退出的 v3）：
+完整的 `deploy/agent.yaml` 如下（镜像换成了带优雅退出的 v3）：
 
 ```yaml
 apiVersion: apps/v1
@@ -1487,7 +1485,7 @@ spec:
           averageUtilization: 50
 ```
 
-意思是：让所有 agent Pod 的平均 CPU 使用率保持在 requests 的 50% 左右，副本数在 3 到 6 之间调整。我们的 requests 是 20m，也就是平均超过 10m 就扩容。算法很直接：期望副本数 = 当前副本数 × 当前使用率 / 目标使用率，向上取整。
+目标是让所有 agent Pod 的平均 CPU 使用率保持在 requests 的 50% 左右，副本数在 3 到 6 之间调整。我们的 requests 是 20m，也就是平均超过 10m 就扩容。算法很直接：期望副本数 = 当前副本数 × 当前使用率 / 目标使用率，向上取整。
 
 用 16 个并发压它，同时观察 HPA：
 
@@ -1515,10 +1513,10 @@ $ kubectl describe hpa agent
 
 3 个扩到 4 个，再到 5 个。压测结束后不会马上缩回去：缩容默认有 5 分钟的稳定窗口，防止流量一抖就来回伸缩。我过了几分钟再看，又回到了 3 个。
 
-两点提醒：
+实际用 HPA 时有两处要留意。
 
 - 用了 HPA，就把 Deployment YAML 里的 `replicas` 删掉。否则每次 `kubectl apply` 都会把副本数重置成 YAML 里写的值，和 HPA 互相打架。
-- CPU 对这个服务其实不是好的扩容信号。为了让演示能触发，我把 requests 设得很低。Agent 类服务大部分时间在等模型返回，CPU 很闲，真正排队的是「进行中的任务数」。更合适的做法是按自定义指标扩容，比如后面会加的 `agent_tasks_in_flight`，借助 Prometheus Adapter 或 KEDA 喂给 HPA。这一步本文没有做，留给你练手。
+- CPU 对这个服务其实不是好的扩容信号。为了让演示能触发，我把 requests 设得很低。Agent 类服务大部分时间在等模型返回，CPU 很闲，真正排队的是进行中的任务数。更合适的做法是按自定义指标扩容，比如后面会加的 `agent_tasks_in_flight`，借助 Prometheus Adapter 或 KEDA 喂给 HPA。这一步本文没有做，留给你练手。
 
 ## 有状态服务：StatefulSet 和 PVC
 
@@ -1561,7 +1559,7 @@ crash-cf4ddffb8-htc8d   0/1     Error               3 (23s ago)   37s
 crash-cf4ddffb8-htc8d   0/1     CrashLoopBackOff    3 (46s ago)   82s
 ```
 
-CrashLoopBackOff 不是一种错误，而是 kubelet 在「等一会儿再重启」。每次失败后等待时间翻倍，从 10 秒左右开始，最长 5 分钟。所以一个崩溃的 Pod 你什么时候 `get`，看到的可能是 `Error`，也可能是 `CrashLoopBackOff`，`RESTARTS` 那一列一直在涨才是关键信号。
+CrashLoopBackOff 不是一种错误，而是 kubelet 在等一会儿再重启。每次失败后等待时间翻倍，从 10 秒左右开始，最长 5 分钟。所以一个崩溃的 Pod 你什么时候 `get`，看到的可能是 `Error`，也可能是 `CrashLoopBackOff`，`RESTARTS` 那一列一直在涨才是关键信号。
 
 原因在日志里。这里有个和很多教程说法不一样的地方，我在 1.37 上实测是这样的：
 
@@ -1575,9 +1573,9 @@ $ kubectl logs deploy/crash --previous
 unable to retrieve container logs for containerd://79e36245667431beb23bd4a431bda879c0f843e505d13948c331f88f35121a48
 ```
 
-容器退出后、等待重启的这段时间，「当前容器」就是刚崩掉的那个，直接 `kubectl logs` 就能看到它退出前打的东西。`--previous` 指的是再往前一个容器，它已经被 kubelet 清理掉了，所以拿不到。`--previous` 真正派上用场的时候，是新容器已经跑起来了，比如被 liveness 杀掉重启以后，你想看被杀的那一个。两个都试一下，哪个有输出看哪个。
+容器退出后、等待重启的这段时间，当前容器就是刚崩掉的那个，直接 `kubectl logs` 就能看到它退出前打的东西。`--previous` 指的是再往前一个容器，它已经被 kubelet 清理掉了，所以拿不到。`--previous` 真正派上用场的时候，是新容器已经跑起来了，比如被 liveness 杀掉重启以后，你想看被杀的那一个。两个都试一下，哪个有输出看哪个。
 
-几种状态的速查：
+把几种常见异常的排查顺序收成一张表。
 
 | 现象 | 先看哪里 | 常见原因 |
 | --- | --- | --- |
@@ -1590,7 +1588,7 @@ unable to retrieve container logs for containerd://79e36245667431beb23bd4a431bda
 
 ## 可观测性：指标、链路、日志各管什么
 
-到这里，服务能部署、能扩容、更新不丢请求了。可它跑得好不好，现在只能靠 `kubectl logs` 一行行翻。可观测性要回答的是三个问题，对应三样东西：
+服务能部署、能扩容、更新不丢请求了，但跑得好不好只能一行行翻 `kubectl logs`。看清运行状态靠指标、链路和日志配合。
 
 | | 回答什么问题 | 长什么样 | 本文用的工具 |
 | --- | --- | --- | --- |
@@ -1600,7 +1598,7 @@ unable to retrieve container logs for containerd://79e36245667431beb23bd4a431bda
 
 三者是配合着用的：指标告诉你出事了、大概在哪；链路告诉你慢在哪一段；日志告诉你那一段里具体发生了什么。把它们串起来的是 trace_id：链路里有它，日志里也有它。
 
-新手最常见的问题是只装工具，不加业务指标。Prometheus 装好以后，CPU、内存、Pod 重启次数这些都有了，可「任务成功率多少」「哪个工具最慢」「一个任务用了多少 token」，只有你自己的代码知道。下面的代码改动，全是为了让服务自己把这些说出来。
+新手最常见的问题是只装工具，不加业务指标。Prometheus 装好以后，CPU、内存、Pod 重启次数这些都有了，可任务成功率多少、哪个工具最慢、一个任务用了多少 token，只有你自己的代码知道。下面的改动就是把这些业务数据埋进指标、链路和日志里。
 
 ### 先装依赖
 
@@ -1621,12 +1619,12 @@ go get github.com/prometheus/client_golang@v1.25.0 \
 | 类型 | 特点 | 例子 |
 | --- | --- | --- |
 | Counter | 只增不减，进程重启才归零 | 请求总数、错误总数、消耗的 token 总数 |
-| Gauge | 可增可减，表示「当前值」 | 正在执行的任务数、队列长度、内存占用 |
+| Gauge | 可增可减，表示当前值 | 正在执行的任务数、队列长度、内存占用 |
 | Histogram | 把观测值按区间（桶）计数 | 请求耗时、每个任务的步数 |
 
-Counter 本身的值没什么意义，「累计 12345 个请求」说明不了什么。有用的是它的增长速度，Prometheus 用 `rate()` 来算，这是 Counter 只增不减的原因：重启归零时 `rate()` 能识别出来并自动修正。
+Counter 本身的值没什么意义，单看累计 12345 个请求说明不了什么。有用的是它的增长速度，Prometheus 用 `rate()` 来算，这是 Counter 只增不减的原因：重启归零时 `rate()` 能识别出来并自动修正。
 
-延迟为什么要用 Histogram，不用平均值？平均值会把少数很慢的请求摊薄。后面的练习里，5% 的请求慢了 2 秒，平均值只涨了 15%，看板上几乎看不出来；可对那 5% 的用户来说，每次都要多等两秒。P99 的意思是「99% 的请求比这个快」，它盯的就是最慢的那一小撮。Histogram 记录的是落在每个区间里的请求有多少，从中可以估算任意分位数，并且多个 Pod 的数据能直接相加。
+延迟为什么要用 Histogram，不用平均值？平均值会把少数很慢的请求摊薄。后面的练习里，5% 的请求慢了 2 秒，平均值只涨了 15%，看板上几乎看不出来；可对那 5% 的用户来说，每次都要多等两秒。P99 表示 99% 的请求比这个值快，它盯的就是最慢的那一小撮。Histogram 记录的是落在每个区间里的请求有多少，从中可以估算任意分位数，并且多个 Pod 的数据能直接相加。
 
 ### metrics.go
 
@@ -1695,12 +1693,12 @@ func instrument(route string, h http.Handler) http.Handler {
 }
 ```
 
-两组指标：
+指标分 HTTP 层和业务层。
 
 - HTTP 层：`http_requests_total` 按路由和状态码计数，`http_request_duration_seconds` 记耗时。`instrument` 用 client_golang 自带的 `promhttp.InstrumentHandlerCounter` 和 `InstrumentHandlerDuration` 包一层 handler，状态码是它自动记录的。
 - 业务层：进行中的任务数、任务结果、步数、token、每个工具的调用次数和耗时。这些是 Agent 服务特有的，Prometheus 不会替你想到。
 
-几个容易踩的点：
+写指标埋点有几处需要注意。
 
 - 标签别放高基数的值。`tool` 只有两三个取值，没问题。千万别把用户 ID、问题原文、trace_id 当标签，每个不同的值都会生成一条新的时间序列，Prometheus 的内存会被撑爆。
 - 桶要按实际延迟来分。任务耗时大多在 0.1～0.5 秒，工具耗时在 0.01～0.05 秒，所以两个 Histogram 的桶不一样。桶划粗了，分位数就不准，后面会看到一个真实的例子。
@@ -1712,7 +1710,7 @@ func instrument(route string, h http.Handler) http.Handler {
 
 - 一个 trace 代表一次完整的请求，比如一次 `POST /v1/tasks`，用 32 位十六进制的 trace_id 标识。
 - 一个 span 是其中的一段工作：一次模型调用、一次工具调用、一次 HTTP 请求。span 有开始时间、耗时、属性，还有一个父 span，于是一个 trace 里的 span 连成一棵树。
-- 在 Go 里，「当前 span」放在 `context.Context` 里传递。`tracer.Start(ctx, ...)` 从 ctx 里找到父 span，创建一个子 span，再返回一个带着子 span 的新 ctx。
+- 在 Go 里，当前 span 放在 `context.Context` 里传递。`tracer.Start(ctx, ...)` 从 ctx 里找到父 span，创建一个子 span，再返回一个带着子 span 的新 ctx。
 
 最后一点是关键：你本来就该把 ctx 一路往下传，好让超时和取消生效，链路追踪就是搭这趟车。ctx 断在哪里，链路就断在哪里。
 
@@ -2022,7 +2020,7 @@ func (a *Agent) searchDocs(ctx context.Context, q string) (string, error) {
 
 和 v1 比，逻辑没变，多了这些：
 
-- `think` 拆成了 `think` 和 `decide`：`think` 负责「调用模型」这件事本身，包括 span、延迟、token 计数；`decide` 只管按规则做决定，纯函数，方便测试。token 是按字数粗算的，真实模型的 API 响应里会直接告诉你用量。
+- `think` 拆成了 `think` 和 `decide`：`think` 负责调用模型这件事本身，包括 span、延迟、token 计数；`decide` 只管按规则做决定，纯函数，方便测试。token 是按字数粗算的，真实模型的 API 响应里会直接告诉你用量。
 - `Run` 开了 `invoke_agent` span，维护进行中任务数这个 Gauge，记录任务结果和步数。原来的循环挪到了 `loop` 里。
 - `callTool` 开 `execute_tool` span，记录每个工具的耗时和成败；失败时把 span 状态设成 Error，再打一条 WARN 日志。
 - `TaskResult` 多了 `trace_id` 字段，返回给调用方。用户报障时带上这个 ID，你就能直接找到那次请求的链路。
@@ -2158,16 +2156,16 @@ func main() {
 }
 ```
 
-变化有四处：
+这一版主要改了日志、埋点和退出收尾。
 
 - `log` 换成了 `slog`，任务成功、失败各打一条结构化日志。
 - 只给 `/v1/tasks` 包了 `otelhttp.NewHandler`（建 span）和 `instrument`（记指标）。探针接口每两秒就被访问一次，给它们建 span、记指标只会制造噪音。
 - 调 search 的 HTTP 客户端换成了 `otelhttp.NewTransport`。它会为每个出站请求建一个 span，并把 `traceparent` 头塞进请求里。
-- 退出时，HTTP 服务关闭之后，再调 `shutdownTracing` 把缓冲区里还没发出去的 span 发完。批量导出器默认攒一批再发，进程直接退出的话，最后几秒的链路数据就丢了。这就是前面说的「程序负责收尾」。
+- 退出时，HTTP 服务关闭之后，再调 `shutdownTracing` 把缓冲区里还没发出去的 span 发完。批量导出器默认攒一批再发，进程直接退出的话，最后几秒的链路数据就丢了。这就是前面说的程序负责收尾。
 
 ### search 服务
 
-`cmd/search/main.go` 也换成带埋点的版本，同时加一个「制造慢查询」的开关，后面练习要用：
+`cmd/search/main.go` 也换成带埋点的版本，同时加一个制造慢查询的开关，后面练习要用：
 
 ```go
 package main
@@ -2383,7 +2381,7 @@ agent_tool_duration_seconds_sum{tool="search_docs"} 0.033372542
 agent_tool_duration_seconds_count{tool="search_docs"} 1
 ```
 
-Histogram 的样子要看懂：`le` 是「小于等于」，每个桶是累计的。这次 search_docs 用了 33 毫秒，所以从 `le="0.05"` 开始往后都是 1。`_sum` 是总耗时，`_count` 是总次数，两者相除就是平均值。
+Histogram 的样子要看懂：`le` 表示小于等于，每个桶是累计的。这次 search_docs 用了 33 毫秒，所以从 `le="0.05"` 开始往后都是 1。`_sum` 是总耗时，`_count` 是总次数，两者相除就是平均值。
 
 按 Ctrl+C 停掉 agent，最后两行日志是 `收到退出信号，等待进行中的请求处理完` 和 `已退出`，优雅退出的流程也走通了。
 
@@ -2393,7 +2391,7 @@ Histogram 的样子要看懂：`le` 是「小于等于」，每个桶是累计�
 
 Helm 是 K8s 的包管理器，一个「chart」就是一套参数化的 YAML 模板。kube-prometheus-stack 这个 chart 一次装好 Prometheus、Alertmanager、Grafana、node-exporter、kube-state-metrics，外加 Prometheus Operator 和一套现成的告警规则、看板。
 
-Prometheus Operator 引入了几个自定义资源（CRD），最常用的两个：`ServiceMonitor` 告诉 Prometheus「去抓哪些 Service 的指标」，`PrometheusRule` 写告警规则。你不用改 Prometheus 的配置文件，写 YAML 提交就行。
+Prometheus Operator 引入了几个自定义资源（CRD），最常用的两个：`ServiceMonitor` 告诉 Prometheus 去抓哪些 Service 的指标，`PrometheusRule` 写告警规则。你不用改 Prometheus 的配置文件，写 YAML 提交就行。
 
 先写参数文件 `monitoring-values.yaml`，放在项目根目录（它不是 K8s 对象，别放进 `deploy/`）：
 
@@ -2421,8 +2419,6 @@ defaultRules:
   disabled:
     NodeClockNotSynchronising: true
 ```
-
-每一项都有原因：
 
 - `serviceMonitorSelectorNilUsesHelmValues: false`：默认情况下，这个 chart 装的 Prometheus 只认带 `release: monitoring` 标签的 ServiceMonitor。不改这一项，你自己写的 ServiceMonitor 不带这个标签，会被静悄悄地忽略，这是新手最常卡住的地方。`ruleSelectorNilUsesHelmValues` 对告警规则同理。
 - `scrapeInterval: 15s`：默认 30 秒，本地实验调短一点，看板反应快。
@@ -2568,7 +2564,7 @@ spec:
       path: /metrics
 ```
 
-ServiceMonitor 选的是 Service，不是 Pod：它找带 `app: agent` 标签的 Service，再通过 Service 找到背后所有 Pod，逐个去抓。所以 agent 的 Service 在 `metadata.labels` 里要有 `app: agent`，第一版 YAML 里那个「现在用不到」的标签就是留给这里的。`port: http` 指的是 Service 端口的名字。
+ServiceMonitor 选的是 Service，不是 Pod：它找带 `app: agent` 标签的 Service，再通过 Service 找到背后所有 Pod，逐个去抓。所以 agent 的 Service 在 `metadata.labels` 里要有 `app: agent`，第一版 YAML 里那个暂时用不到的标签就是留给这里的。`port: http` 指的是 Service 端口的名字。
 
 最后，为了让看板上有数据，起一个持续发请求的 Deployment，`deploy/traffic.yaml`：
 
@@ -2677,7 +2673,7 @@ sum by (le) (rate(http_request_duration_seconds_bucket{route="/v1/tasks"}[5m]))
 ... 往后都是 4.11
 ```
 
-每秒 4.11 个请求里，有 2.37 个不超过 0.25 秒，全部不超过 0.5 秒。第 99 百分位落在 0.25 到 0.5 秒这个桶里，可桶里的请求具体分布在哪，Prometheus 不知道，只能假设它们均匀分布、线性插值，于是算出接近桶上限的 0.494。这就是前面说的「桶划粗了分位数就不准」。想更准，就在常见延迟附近多划几个桶，比如 0.3、0.4；Prometheus 新一点的版本还支持原生直方图（native histograms），桶是自动按指数划分的，值得了解。
+每秒 4.11 个请求里，有 2.37 个不超过 0.25 秒，全部不超过 0.5 秒。第 99 百分位落在 0.25 到 0.5 秒这个桶里，可桶里的请求具体分布在哪，Prometheus 不知道，只能假设它们均匀分布、线性插值，于是算出接近桶上限的 0.494。这就是前面说的桶划粗了分位数就不准。想更准，就在常见延迟附近多划几个桶，比如 0.3、0.4；Prometheus 新一点的版本还支持原生直方图（native histograms），桶是自动按指数划分的，值得了解。
 
 不过这个误差不影响判断趋势，接下来的练习里 P99 会从 0.49 跳到 1.6，变化远大于误差。
 
@@ -2830,7 +2826,7 @@ kubectl set env deploy/search SLOW_RATIO=0.05 SLOW_DELAY=2s
 
 ![Grafana 上的 Agent Demo 看板，故障期间：10:40 之后任务 P99 从 0.5 秒跳到 2 秒上下并来回波动，平均值和 P50 几乎没动；工具耗时 P99 面板里 search_docs 从 25 毫秒涨到 2 秒以上，get_weather 不变；错误率仍是 0，任务成功率 100%](/assets/img/posts/go-k8s-observability/grafana-slow.png)
 
-几个面板放在一起看：
+把几个面板合起来看，能先把范围缩窄。
 
 - 错误率还是 0，任务成功率还是 100%。没有报错，只是变慢了。
 - 「任务耗时」面板里，P99 那条线在 10:40 跳了上去，平均值和 P50 几乎没动。同一时刻用 PromQL 查 5 分钟窗口的数：
@@ -2873,7 +2869,7 @@ $ kubectl logs -l app=agent --tail=-1 | grep 0b58f5f90a0ea832203cc6d4fe32cdcb
 {"time":"2026-10-23T02:43:10.351618294Z","level":"INFO","msg":"task done","steps":2,"tools":["search_docs"],"duration_ms":2235,"trace_id":"0b58f5f90a0ea832203cc6d4fe32cdcb","span_id":"0874734fd2267e93"}
 ```
 
-search 的日志写得明明白白：查询「滚动更新怎么配置」时触发了慢查询，花了 2020 毫秒。到这里，定位就闭环了：告警 → 看板按工具拆分 → 链路找到慢的那一段 → 日志找到具体原因。
+search 的日志写得很清楚：查询「滚动更新怎么配置」时触发了慢查询，花了 2020 毫秒。整个定位过程就是：告警 → 看板按工具拆分 → 链路找到慢的那一段 → 日志找到具体原因。
 
 注意命令里的 `--tail=-1`。我在这上面栽过一次：`kubectl logs -l 标签` 按标签查日志时，默认每个 Pod 只取最后 10 行，不是全部。我一开始用它统计错误数，统计出来的数偏小，差点得出错误结论。按标签查日志时，记得显式加上 `--tail=-1` 或者 `--since=10m`。真实环境里日志量大，一般会用 Loki、Elasticsearch 这类日志系统集中收集，再按 trace_id 检索，Grafana 里还能从 trace 直接跳到对应的日志。思路是一样的。
 
@@ -2894,7 +2890,7 @@ kubectl set env deploy/search SLOW_RATIO- SLOW_DELAY-
 {"time":"2026-10-23T01:51:39.990581585Z","level":"ERROR","msg":"task failed","question":"探针是什么","err":"context deadline exceeded","trace_id":"443f8d0a75bc4fe3dd59324dfcdd8d26","span_id":"dd8e394c4b672b06"}
 ```
 
-时间正好对上 search 的滚动更新。这是前面 agent 遇到过的老问题：search 的 Deployment 没配 `preStop`。旧的 search Pod 一收到 SIGTERM 就退出了，转发规则还没更新，agent 发过去的请求要么被拒绝，要么石沉大海，一直等到任务的 5 秒超时。我推测「石沉大海」是因为旧 Pod 的网络已经被清理掉，发往它 IP 的包没人回应，连拒绝都收不到；这一点我没有抓包验证。
+时间正好对上 search 的滚动更新。这是前面 agent 遇到过的老问题：search 的 Deployment 没配 `preStop`。旧的 search Pod 一收到 SIGTERM 就退出了，转发规则还没更新，agent 发过去的请求要么被拒绝，要么石沉大海，一直等到任务的 5 秒超时。我推测石沉大海是因为旧 Pod 的网络已经被清理掉，发往它 IP 的包没人回应，连拒绝都收不到；这一点我没有抓包验证。
 
 为了确认，我让 search 连续滚动重启 6 次，期间 traffic 一直在发请求，分别统计有没有 `preStop` 时 agent 的报错：
 
@@ -2912,17 +2908,17 @@ kubectl set env deploy/search SLOW_RATIO- SLOW_DELAY-
                 seconds: 5
 ```
 
-这件事让我意识到两点。第一，`preStop` 这类配置要在每个服务上都检查一遍，下游服务滚动更新，挂的是上游的请求，上游的看板会先报警。第二，那 3 次「连接被拒」被 agent 当成工具错误交回给了模型，任务照样成功，只在「工具调用失败」面板上留下一个小凸起。如果只看任务成功率，这类问题是看不到的。
+`preStop` 这类配置要在每个服务上都检查一遍：下游服务滚动更新，挂的是上游的请求，上游的看板会先报警。那 3 次连接被拒被 agent 当成工具错误交回给了模型，任务照样成功，只在「工具调用失败」面板上留下一个小凸起。如果只看任务成功率，这类问题是看不到的。
 
 ## 告警：只告警需要人处理的事
 
-上面两条规则是按「症状」写的：用户能感受到的错误和延迟。kube-prometheus-stack 自带了上百条规则，CPU 高、Pod 重启、磁盘快满，大多是「原因」。我的看法是，会把人叫醒的告警只留症状类的，原因类的放进看板，或者降级成工作时间再处理的通知。告警太多的结果是大家都不看，真出事时那条也被淹没了。
+上面两条规则是按症状写的，对应用户能感受到的错误和延迟。kube-prometheus-stack 自带了上百条规则，CPU 高、Pod 重启、磁盘快满，大多是原因。通常只把症状类告警留作半夜叫醒人的级别，原因类的放进看板，或者降级成工作时间再处理的通知。告警太多的结果是大家都不看，真出事时那条也被淹没了。
 
-几个实际的建议：
+配告警规则有几条实用原则。
 
-- 每条告警都要能回答「收到以后我该做什么」。答不上来的，要么删掉，要么降级。
+- 每条告警都要能回答收到以后该做什么。答不上来的，要么删掉，要么降级。
 - 用 `for` 和足够长的窗口过滤抖动。这次练习里，1 分钟窗口的 P99 上蹿下跳，5 分钟窗口就平稳得多。
-- 阈值从服务的目标倒推。比如定一个目标「99% 的任务在 1 秒内完成」，那 P99 超过 1 秒就是在消耗这个目标，这就是 SLO（服务等级目标）的思路。再进一步可以按「错误预算消耗速度」告警，Google 的 SRE 书里讲得很细，推荐读那几章。
+- 阈值从服务的目标倒推。比如定一个 99% 的任务在 1 秒内完成的目标，那 P99 超过 1 秒就是在消耗这个目标，这就是 SLO（服务等级目标）的思路。再进一步可以按错误预算消耗速度告警，Google 的 SRE 书里讲得很细，推荐读那几章。
 - 自带规则里有一条 `Watchdog` 永远是 firing，这是故意的：它用来证明整条告警链路是通的，Alertmanager 收不到它反而说明出问题了。
 
 告警发到哪里，由 Alertmanager 的路由配置决定：可以发邮件、Slack，也可以通过通用的 Webhook 接到钉钉、飞书。这部分和 K8s 关系不大，本文就不展开了。
@@ -2970,13 +2966,13 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
 ```
 
-镜像标签用 commit SHA，每个版本唯一，能精确对应到代码，也就不会有 `latest` 那种「到底是哪个版本」的问题。这个文件我用 actionlint 检查过，没有放到 GitHub 上真跑，使用前请换成你的仓库再验证一遍。
+镜像标签用 commit SHA，每个版本唯一，能精确对应到代码，也就不会有 `latest` 那种分不清到底是哪个版本的问题。这个文件我用 actionlint 检查过，没有放到 GitHub 上真跑，使用前请换成你的仓库再验证一遍。
 
 部署那一步有两种主流做法：CI 跑完直接 `kubectl apply`；或者 CI 只负责改 Git 仓库里 YAML 的镜像标签，由集群里的 Argo CD、Flux 发现变化后自己同步（GitOps）。后一种的好处是集群状态永远等于 Git 里的内容，回滚就是 revert 一个提交。
 
 ### 灰度：Deployment 做不到的事
 
-Deployment 的滚动更新只能控制「一次换几个 Pod」，换完就全是新版本了。它做不到「先放 10% 的流量给新版本，观察半小时再全量」。
+Deployment 的滚动更新只能控制一次换几个 Pod，换完就全是新版本，做不到先放 10% 的流量给新版本，观察半小时再全量。
 
 要按比例分流，得在 Service 前面加一层能按权重转发的东西，Gateway API 的 HTTPRoute 就支持。新版本单独起一个 Deployment 和 Service，`deploy/agent-canary.yaml`：
 
@@ -3061,16 +3057,16 @@ $ for i in $(seq 200); do curl -s -X POST localhost:59038/v1/tasks -d '{"questio
 按优先级排，前两项值得认真学，后面的看方向：
 
 1. SLO 和容量评估：给服务定目标、按错误预算告警、估算多少流量要多少副本。上面告警那一节只开了个头。
-2. Operator 和 CRD：用 kubebuilder 写一个控制器，比如定义一个 `AgentTask` 资源，控制器负责把任务跑起来、更新状态。写过一次，你对「控制器不断把实际状态拉向期望状态」会有切身的理解。
+2. Operator 和 CRD：用 kubebuilder 写一个控制器，比如定义一个 `AgentTask` 资源，控制器负责把任务跑起来、更新状态。自己写过一次，对控制器怎么把实际状态拉向期望状态会清楚得多。
 3. 容器网络和存储：Calico、Cilium 这些 CNI 插件，CSI 存储驱动。做容器平台、运行时环境才需要深入。
 4. 服务网格：Istio 的流量管理和 mTLS。上面灰度那里提到了它的用武之地，但它的运维成本不低，没有明确需求时优先级最低。
 
-还有几件我觉得不值得在入门阶段花时间的事：
+下面几件事在入门阶段可以先放一放。
 
 - 从 K8s 源码或架构原理学起。先会用、会排障，原理在排障时自然会碰到，那时候再看印象更深。
 - 花大量时间折腾集群网络、证书、高可用。那是平台和 SRE 团队的活，写业务服务的话，本地 kind 加上公司现成的集群就够了。
 - 只把 Prometheus 装起来，不加业务指标。装工具很容易，难的是知道该观测什么。
-- 跳过优雅退出。看起来是小事，这篇里两次滚动更新出问题，都栽在它和 `preStop` 上。
+- 跳过优雅退出。这篇里两次滚动更新出问题，都出在它和 `preStop` 没配好。
 
 ## 清理
 
